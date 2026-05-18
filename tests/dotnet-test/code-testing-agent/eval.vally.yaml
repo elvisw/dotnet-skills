@@ -30,7 +30,10 @@ stimuli:
           timeout: 5m
       - type: run-command
         config:
-          command: sh -c 'find TestResults -type f -name coverage.cobertura.xml -print -quit | grep -q coverage.cobertura.xml'
+          # dotnet test --collect:"XPlat Code Coverage" writes the report under
+          # <TestProject>/TestResults/<guid>/coverage.cobertura.xml — not at a
+          # workspace-root TestResults/ — so search recursively from cwd.
+          command: sh -c 'find . -type f -name coverage.cobertura.xml -print -quit | grep -q coverage.cobertura.xml'
           expected_exit_code: 0
           timeout: 1m
       - type: prompt
