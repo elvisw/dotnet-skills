@@ -277,9 +277,14 @@ if [ -z "$STATE" ]; then
   EVAL_STATE=$(eval_status_state)
   log "reviewDecision=$REVIEW_DECISION unresolved_threads=$UNRESOLVED eval_status=$EVAL_STATE"
 
-  # Malicious scan precedence (non-bot, untrusted, no marker for current head)
+  # Malicious scan precedence (non-bot, untrusted, no marker for current head).
+  # Match either the orchestrator-posted dispatched marker (source of truth) or
+  # the agent-posted fingerprint marker (set by a successful scan run).
   if [ "$IS_BOT" = "false" ] && [ "$IS_TRUSTED" = "false" ]; then
-    SECS=$(seconds_since_marker "<!-- pr-malicious-scan:fingerprint=$HEAD_SHA_SHORT:")
+    SECS=$(seconds_since_marker "<!-- pr-malicious-scan:dispatched=$HEAD_SHA_SHORT -->")
+    if [ -z "$SECS" ]; then
+      SECS=$(seconds_since_marker "<!-- pr-malicious-scan:fingerprint=$HEAD_SHA_SHORT:")
+    fi
     if [ -z "$SECS" ]; then
       STATE="needs-malicious-scan"
     fi

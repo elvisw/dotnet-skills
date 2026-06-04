@@ -7,8 +7,10 @@ description: >
   code, never checks out the head with write tokens.
 
 on:
-  pull_request_target:
-    types: [opened, synchronize, reopened]
+  # Dispatched exclusively by .github/workflows/pr-triage-batch.yml.
+  # The orchestrator owns dedup (one scan per head SHA via a pre-dispatch
+  # marker comment), so this workflow is intentionally NOT triggered by
+  # pull_request_target — that path produced per-push duplicate scans.
   workflow_dispatch:
     inputs:
       pr_number:
@@ -46,11 +48,12 @@ on:
         SECRET_6: ${{ secrets.COPILOT_GITHUB_TOKEN_7 }}
         SECRET_7: ${{ secrets.COPILOT_GITHUB_TOKEN_8 }}
 
-# Skip on forks (no secrets, no point) and on draft PRs.
-if: ${{ !github.event.repository.fork && !(github.event_name == 'pull_request_target' && github.event.pull_request.draft) }}
+# Skip on forks (no secrets, no point). Drafts are filtered out by the
+# orchestrator before dispatch.
+if: ${{ !github.event.repository.fork }}
 
 concurrency:
-  group: gh-aw-${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number }}
+  group: gh-aw-${{ github.workflow }}-${{ inputs.pr_number }}
   cancel-in-progress: true
 
 jobs:
@@ -70,7 +73,31 @@ permissions:
 tools:
   github:
     toolsets: [repos, pull_requests]
-  bash: ["cat", "grep", "head", "tail", "find", "ls", "jq", "sort", "wc", "awk", "sed"]
+    # This scanner's job is to inspect PRs from non-approved (untrusted)
+    # contributors. The default `min-integrity: approved` would block every
+    # MCP read tool against exactly the population we need to inspect, so we
+    # opt down to `none` per the gh-aw integrity-filter reference's guidance
+    # for spam-detection / analytics workflows. Defense-in-depth is preserved
+    # by `safe-outputs` (only code-scanning alerts, one comment, ≤2 labels)
+    # and the `permissions: contents: read, pull-requests: read` block above.
+    min-integrity: none
+    # Scope the github MCP guard to public repos only — this workflow only
+    # ever inspects this repo (which is public). `allowed-repos` accepts
+    # `all` or `public`; `public` is the tighter of the two and matches the
+    # pattern used by other gh-aw workflows in this repo.
+    allowed-repos: public
+  bash:
+    - "cat"
+    - "grep"
+    - "head"
+    - "tail"
+    - "find"
+    - "ls"
+    - "jq"
+    - "sort"
+    - "wc"
+    - "awk"
+    - "sed"
 
 safe-outputs:
   create-code-scanning-alert:
@@ -108,42 +135,49 @@ is to inspect the **diff** of a single pull request submitted by an external
 
 ## Target PR
 
-- PR number: `${{ github.event.pull_request.number || inputs.pr_number }}`
-- Head SHA: `${{ github.event.pull_request.head.sha }}` (workflow_dispatch: look it up)
+- PR number: `${{ inputs.pr_number }}`
+- Head SHA: look it up via the GitHub MCP `pull_request_read` tool at scan
+  time. Always use the head SHA reported by the API, not anything from the
+  diff body.
 
-Fetch the PR via `GET /repos/{owner}/{repo}/pulls/{pr_number}` to read the
-author login, the `author_association`, and the head SHA when running from
-`workflow_dispatch`.
+Use the GitHub MCP tools (`pull_request_read`, `repos`) to read PR data.
+The scanner runs with `min-integrity: none` so these tools are NOT filtered
+by the gh-aw integrity gateway. `safe-outputs` still gates every mutation.
 
 ## Step 1 — Eligibility
 
-1. Fetch the PR via `GET /repos/{owner}/{repo}/pulls/{pr_number}`.
+1. Fetch the PR via the MCP `pull_request_read` tool.
 2. If `author_association` ∈ `{OWNER, MEMBER, COLLABORATOR}`, **stop**: emit
    `noop` with reason `trusted-contributor`. Trusted contributors are scanned
    only by request.
 3. If the author's login ends with `[bot]` or `.user.type == "Bot"`, **stop**:
    emit `noop` with reason `bot-author`.
-4. Look up the most recent bot comment whose body contains
-   `<!-- pr-malicious-scan:fingerprint=<sha7>:` for the **current head SHA**'s
-   short form (first 7 chars). If one exists, **stop**: emit `noop` with reason
-   `already-scanned-this-head`. This makes the scan idempotent per push.
+4. **Idempotency self-check.** Fetch existing PR comments via the MCP tools
+   and look for any prior comment authored by `github-actions[bot]` whose
+   body contains the literal string
+   `<!-- pr-malicious-scan:fingerprint=<sha7>:` for the **current head
+   SHA**'s short form (first 7 chars). If found, **stop**: emit `noop` with
+   reason `already-scanned-this-head`.
+
+   **Do NOT match the `<!-- pr-malicious-scan:dispatched=<sha7> -->`
+   marker** — that one is posted by the orchestrator immediately *before* it
+   dispatches this workflow, so it will always be present at the start of
+   your run. Treating it as "already scanned" would cause every scan to
+   no-op.
 
 ## Step 2 — Fetch the diff
 
-Use the GitHub API. Do not run `git checkout` on the PR head.
+Use the GitHub MCP `pull_request_read` tool with the `files` action (or the
+`repos` toolset for raw blob reads). Do not run `git checkout` on the PR
+head, and do not invoke `gh` or `curl` from bash — only the MCP tools and
+the text-processing utilities listed under `tools.bash` are available.
 
-```bash
-gh api --paginate "repos/${REPO}/pulls/${PR}/files" \
-  --jq '.[] | {filename, status, additions, deletions, patch}'
-```
-
-For files where `patch` is null/empty (binary or oversized), record the
-filename and treat it as `binary-or-oversized`. For at most 5 such files that
-are also under a sensitive path (see Step 3), fetch the raw blob:
-
-```bash
-gh api "repos/${REPO}/contents/${path}?ref=${HEAD_SHA}" --jq .content | base64 -d | head -c 8192
-```
+For each changed file, capture `filename`, `status`, `additions`,
+`deletions`, and `patch`. For files where `patch` is null/empty (binary or
+oversized), record the filename and treat it as `binary-or-oversized`. For
+at most 5 such files that are also under a sensitive path (see Step 3),
+fetch the raw file content via the MCP `repos` toolset (`get_file_contents`
+at `ref=<HEAD_SHA>`) and inspect the first ~8 KB.
 
 Limit total inspection to ~64 changed files / ~256 KB of patch text. If the
 diff is larger, scan the most-sensitive paths first
@@ -211,9 +245,15 @@ comment (Step 5). Do not apply labels.
 
 ## Step 5 — Idempotency marker (always)
 
-Always post a single PR comment containing the marker so the orchestrator and
-the per-PR worker can detect that this head SHA has been scanned. Use
-`add_comment` with body shaped exactly:
+> [!IMPORTANT]
+> The `add_comment` body **must begin with the literal HTML-comment marker
+> line on its own first line**. Do not add any prefix, blank line, indentation,
+> emoji, or other text before it. The orchestrator parses prior bot comments
+> looking for this exact marker.
+
+Always post a single PR comment containing the marker so the orchestrator
+and the per-PR worker can detect that this head SHA has been scanned. Use
+`add_comment` with body shaped exactly (the **first line** is the marker):
 
 - **Clean scan** (no findings):
 
