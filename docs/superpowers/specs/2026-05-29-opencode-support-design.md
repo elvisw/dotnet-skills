@@ -34,7 +34,8 @@
 | 目标 | 内容 |
 |---|---|
 | `.opencode/skills/<name>/SKILL.md` | 复制并处理后的 SKILL.md |
-| `opencode.json` | 代理定义、MCP/LSP 配置、权限 |
+| `.opencode/agents/<name>.md` | 代理定义（YAML frontmatter + prompt body） |
+| `opencode.json` | MCP/LSP 配置 |
 
 ### 脚本流程
 
@@ -43,7 +44,7 @@
 3. **生成技能文件**：
    - 无冲突 → 复制原文件到 `.opencode/skills/<name>/SKILL.md`
    - 有冲突 → 加插件前缀重命名目录，同时**更新 SKILL.md frontmatter 的 `name` 字段**
-4. **生成代理 prompt**：遍历 `plugins/*/agents/*.agent.md`，解析 YAML frontmatter，剥离后写入 `opencode.json` 的 `agent` 段（用 `{file:...}` 引用去 frontmatter 的 prompt 文件）
+4. **生成代理 markdown 文件**：遍历 `plugins/*/agents/*.agent.md`，解析 YAML frontmatter，剥离 prompt body，重新组装为 OpenCode 标准 agent markdown 格式（含 description/mode/permission/hidden 的 YAML frontmatter），写入 `.opencode/agents/<name>.md`
 5. **翻译 MCP 配置**：从 `plugin.json` 读取 `mcpServers`，翻译为 OpenCode 格式写入 `opencode.json`
 6. **翻译 LSP 配置**：从 `plugins/dotnet/lsp.json` 读取，翻译为 OpenCode 格式
 7. **合并输出**：生成或更新 `opencode.json`，保留用户手动添加的配置段
@@ -54,8 +55,7 @@
 **不删除已有文件**。脚本对 `opencode.json` 采用分段更新策略：
 
 - 如果文件不存在 → 创建完整配置
-- 如果文件存在 → 仅更新 `agent`、`mcp`、`lsp`、`permission.skill` 这四个段，保留其他用户自定义配置
-- 生成的段用注释标记 `# BEGIN GENERATED` / `# END GENERATED`，方便识别
+- 如果文件存在 → 仅更新 `mcp`、`lsp` 段，保留其他用户自定义配置
 
 ---
 
@@ -91,15 +91,29 @@ plugins/dotnet-test/skills/run-tests/SKILL.md              →  .opencode/skills
 
 ### 设计
 
-生成脚本从 `.agent.md` 读取 frontmatter 元数据，产出到 `opencode.json` 的 `agent` 段。
-prompt 内容通过 `{file:...}` 直接引用原文件（路径相对于项目根 `./plugins/...`）。
+生成脚本从 `.agent.md` 读取 frontmatter 元数据，剥离 prompt body，
+重新组装为 OpenCode 标准 agent markdown 格式，写入 `.opencode/agents/<name>.md`。
 
-如果 OpenCode 的 `{file:...}` 会自动剥离 YAML frontmatter，则无需中间文件；
-如果不会，则脚本需剥离 frontmatter 后单独存为 prompt 文件。此点待实施时验证。
+生成的 markdown 文件格式：
+
+```markdown
+---
+description: <from .agent.md>
+mode: subagent
+hidden: true          # 仅当 user-invocable: false 时
+permission:
+  read: allow
+  edit: allow          # 来自 tools 字段映射
+---
+
+<prompt body — .agent.md 剥离 frontmatter 后的内容>
+```
+
+用户可以将 `.opencode/agents/` 下的文件复制到 `~/.config/opencode/agents/` 以全局使用。
 
 ### 字段映射
 
-| 仓库 .agent.md 字段 | opencode.json 字段 | 说明 |
+| 仓库 .agent.md 字段 | agent markdown 字段 | 说明 |
 |---|---|---|
 | `description` | `description` | 直接复用 |
 | `user-invocable: true` 或缺失 | `mode: subagent` | 用户可 @ 调用。**缺失时默认视为 true** |
@@ -188,13 +202,7 @@ lsp.json (上游)                        opencode.json (目标)
 
 ### 权限
 
-```jsonc
-{
-  "permission": {
-    "skill": { "*": "allow" }
-  }
-}
-```
+不生成顶层 `permission` 配置。每个 agent 的权限通过其 markdown 文件 frontmatter 中的 `permission` 字段控制，遵循 OpenCode 标准 permission 语法。
 
 ---
 
@@ -225,7 +233,8 @@ lsp.json (上游)                        opencode.json (目标)
 
 | 文件 | 说明 |
 |---|---|
-| `opencode.json` | OpenCode 根配置 |
+| `opencode.json` | OpenCode 根配置（仅 MCP/LSP） |
+| `.opencode/agents/<name>.md` | 代理定义文件（16 个） |
 | `.opencode/skills/<name>/SKILL.md` | 技能文件（最大 92 个） |
 
 ### 不修改
@@ -238,15 +247,11 @@ lsp.json (上游)                        opencode.json (目标)
 
 ## 待验证事项
 
-仅剩 1 项：
+已确认全部：
 
-1. **OpenCode 的 `{file:...}` 是否自动剥离 YAML frontmatter** — 决定 agent prompt 是否需要单独剥离 frontmatter 后存文件。如自动剥离，可直接引用原 `.agent.md` 路径。
-
-已确认：
-
+- Agent markdown 文件格式符合 OpenCode 规范 ✓
 - 技能名无冲突 ✓
 - LSP `command` 数组格式正确 ✓，字段名为 `extensions`
 - MCP `type: "local"` + `command` 数组格式正确 ✓
-- LSP `command` 数组 + `extensions` 字段名正确 ✓
 - Agent `hidden: true` 可用于 `user-invocable: false` 代理 ✓
 - `warmupTimeoutMs` 不支持 ✓，丢弃

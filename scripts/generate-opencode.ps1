@@ -154,7 +154,13 @@ function ConvertTo-Permission {
 function Export-Agents {
     param([array]$Plugins, [string]$OutputDir)
 
-    $agents = @{}
+    $agentsDir = Join-Path $OutputDir "agents"
+    if (Test-Path $agentsDir) {
+        Remove-Item -Recurse -Force $agentsDir
+    }
+    New-Item -ItemType Directory -Path $agentsDir -Force | Out-Null
+
+    $count = 0
     $warnings = @()
 
     foreach ($plugin in $Plugins) {
@@ -191,30 +197,31 @@ function Export-Agents {
             $permission = ConvertTo-Permission -Tools $fm.tools
             $desc = ($fm.description -split '\n')[0]
 
-            $bodyMatches = [regex]::Match((Get-Content $agentPath -Raw), '(?s)^---\s*\n.*?\n---\s*\n(.*)')
-            if ($bodyMatches.Success) {
-                $promptsDir = Join-Path $OutputDir "prompts"
-                if (-not (Test-Path $promptsDir)) { New-Item -ItemType Directory -Path $promptsDir -Force | Out-Null }
-                $promptFile = Join-Path $promptsDir "$agentName.prompt.md"
-                Set-Content $promptFile $bodyMatches.Groups[1].Value -NoNewline
-                $relPath = ".opencode/prompts/$agentName.prompt.md"
-            } else {
-                $relPath = "plugins/$($plugin.Name)/agents/$agentName.agent.md" -replace '\\', '/'
-            }
+            $rawContent = Get-Content $agentPath -Raw
+            $bodyMatches = [regex]::Match($rawContent, '(?s)^---\s*\n.*?\n---\s*\n(.*)')
+            $promptBody = if ($bodyMatches.Success) { $bodyMatches.Groups[1].Value.Trim() } else { $rawContent }
 
-            $agents[$agentName] = @{
-                description = $desc
-                mode        = $mode
-                hidden      = $hidden
-                prompt      = "{file:./$relPath}"
-                permission  = $permission
+            $sb = [System.Text.StringBuilder]::new()
+            $sb.AppendLine("---") | Out-Null
+            $sb.AppendLine("description: $desc") | Out-Null
+            $sb.AppendLine("mode: $mode") | Out-Null
+            if ($hidden) { $sb.AppendLine("hidden: true") | Out-Null }
+            $sb.AppendLine("permission:") | Out-Null
+            foreach ($key in ($permission.Keys | Sort-Object)) {
+                $sb.AppendLine("  $($key): $($permission[$key])") | Out-Null
             }
+            $sb.AppendLine("---") | Out-Null
+            $sb.AppendLine() | Out-Null
+            $sb.AppendLine($promptBody) | Out-Null
+
+            $agentFile = Join-Path $agentsDir "$agentName.md"
+            Set-Content $agentFile $sb.ToString() -NoNewline
+            $count++
         }
     }
 
-    Write-Host "  Agents parsed: $($agents.Count)"
+    Write-Host "  Agents written: $count to $agentsDir"
     foreach ($w in $warnings) { Write-Host "  $w" }
-    return $agents
 }
 
 function ConvertTo-OpenCodeMcp {
@@ -278,7 +285,6 @@ function ConvertTo-HashtableDeep {
 
 function New-OpenCodeJson {
     param(
-        [hashtable]$AgentConfig,
         [hashtable]$McpConfig,
         [hashtable]$LspConfig,
         [string]$ConfigFile
@@ -305,27 +311,6 @@ function New-OpenCodeJson {
     Write-JsonLine '{'
     $indent++
     Write-JsonLine '"$schema": "https://opencode.ai/config.json",'
-    Write-JsonLine ''
-    Write-JsonLine '"permission": { "skill": { "*": "allow" } },'
-    Write-JsonLine ''
-    Write-JsonLine '"agent": {'
-    $first = $true
-    foreach ($name in ($AgentConfig.Keys | Sort-Object)) {
-        if (-not $first) { $sb.AppendLine(',') | Out-Null }
-        $first = $false
-        $a = $AgentConfig[$name]
-        $def = [ordered]@{
-            description = $a.description
-            mode        = $a.mode
-            prompt      = $a.prompt
-            permission  = $a.permission
-        }
-        if ($a.hidden) { $def["hidden"] = $true }
-        $agentEntry = $def | ConvertTo-Json -Depth 5 -Compress
-        Write-JsonLine "    `"$name`": $agentEntry"
-    }
-    $sb.AppendLine() | Out-Null
-    Write-JsonLine '},'
     Write-JsonLine ''
 
     if ($McpConfig.Count -gt 0) {
@@ -407,7 +392,7 @@ function Invoke-ScriptMain {
 
     Export-Skills -Plugins $plugins -OutputDir $OutputDir
 
-    $agentConfig = Export-Agents -Plugins $plugins -OutputDir $OutputDir
+    Export-Agents -Plugins $plugins -OutputDir $OutputDir
 
     $mcpConfig = ConvertTo-OpenCodeMcp -Plugins $plugins
     Write-Host "  MCP servers: $($mcpConfig.Count)"
@@ -421,7 +406,7 @@ function Invoke-ScriptMain {
 
     Update-GitIgnore
 
-    New-OpenCodeJson -AgentConfig $agentConfig -McpConfig $mcpConfig -LspConfig $lspConfig -ConfigFile $ConfigFile
+    New-OpenCodeJson -McpConfig $mcpConfig -LspConfig $lspConfig -ConfigFile $ConfigFile
 }
 
 Invoke-ScriptMain
