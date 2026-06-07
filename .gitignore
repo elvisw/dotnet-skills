@@ -432,5 +432,8 @@ vally-results/
 *.lscache
 .dotnet/
 
-# Local design plan kept out of the PR
-docs/design/pr-triage-workflows-plan.md
+.superpowers/
+
+# OpenCode generated files
+opencode.json
+.opencode/
