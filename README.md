@@ -112,6 +112,27 @@ You can also install individual skills using the `skill-installer` CLI with the 
 $ skill-installer install https://github.com/dotnet/skills/tree/main/plugins/<plugin>/skills/<skill-name>
 ```
 
+### OpenCode
+
+All plugins, skills, and agents can be loaded into [OpenCode](https://opencode.ai) via a one-time generation step.
+
+**Prerequisites:** Python 3 with `pyyaml` installed (`pip install pyyaml`).
+
+```powershell
+# 1. Clone or use your existing fork of this repository
+git clone https://github.com/elvisw/dotnet-skills.git
+cd dotnet-skills
+
+# 2. Generate OpenCode configuration
+./scripts/generate-opencode.ps1
+# Output: 92 skills → .opencode/skills/
+#         16 agents + MCP + LSP → opencode.json
+
+# 3. Launch OpenCode — skills and agents are auto-discovered
+```
+
+After upstream updates, re-run `./scripts/generate-opencode.ps1` to sync.
+Generated files (`.opencode/`, `opencode.json`) are gitignored and do not affect upstream merges.
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and how to add a new plugin.
