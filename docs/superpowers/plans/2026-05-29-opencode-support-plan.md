@@ -308,9 +308,15 @@ Append:
 
 ```powershell
 function Export-Agents {
-    param([array]$Plugins)
+    param([array]$Plugins, [string]$OutputDir)
 
-    $agents = @{}
+    $agentsDir = Join-Path $OutputDir "agents"
+    if (Test-Path $agentsDir) {
+        Remove-Item -Recurse -Force $agentsDir
+    }
+    New-Item -ItemType Directory -Path $agentsDir -Force | Out-Null
+
+    $count = 0
     $warnings = @()
 
     foreach ($plugin in $Plugins) {
@@ -339,7 +345,6 @@ function Export-Agents {
                 }
                 if ($val -eq $false) { $hidden = $true }
             }
-            # else: missing field → default true (user-invocable), hidden stays false
 
             if ($fm.PSObject.Properties["handoffs"]) {
                 $warnings += "WARNING: handoffs field ignored for agent '$agentName' ($agentPath)"
@@ -348,41 +353,54 @@ function Export-Agents {
             $permission = ConvertTo-Permission -Tools $fm.tools
             $desc = ($fm.description -split '\n')[0]
 
-            # Convert absolute path to repo-relative for {file:...} reference
-            $relPath = $agentPath -replace [regex]::Escape("$rootDir\"), ''
-            $relPath = $relPath -replace '\\', '/'
+            $rawContent = Get-Content $agentPath -Raw
+            $bodyMatches = [regex]::Match($rawContent, '(?s)^---\s*\n.*?\n---\s*\n(.*)')
+            $promptBody = if ($bodyMatches.Success) { $bodyMatches.Groups[1].Value.Trim() } else { $rawContent }
 
-            $agents[$agentName] = @{
-                description = $desc
-                mode        = $mode
-                hidden      = $hidden
-                prompt      = "{file:./$relPath}"
-                permission  = $permission
+            $sb = [System.Text.StringBuilder]::new()
+            $sb.AppendLine("---") | Out-Null
+            $sb.AppendLine("description: $desc") | Out-Null
+            $sb.AppendLine("mode: $mode") | Out-Null
+            if ($hidden) { $sb.AppendLine("hidden: true") | Out-Null }
+            $sb.AppendLine("permission:") | Out-Null
+            foreach ($key in ($permission.Keys | Sort-Object)) {
+                $sb.AppendLine("  $($key): $($permission[$key])") | Out-Null
             }
+            $sb.AppendLine("---") | Out-Null
+            $sb.AppendLine() | Out-Null
+            $sb.AppendLine($promptBody) | Out-Null
+
+            $agentFile = Join-Path $agentsDir "$agentName.md"
+            Set-Content $agentFile $sb.ToString() -NoNewline
+            $count++
         }
     }
 
-    Write-Host "  Agents parsed: $($agents.Count)"
+    Write-Host "  Agents written: $count to $agentsDir"
     foreach ($w in $warnings) { Write-Host "  $w" }
-    return $agents
 }
 ```
+
+**Design note:** Agents are written to `.opencode/agents/<name>.md` as standalone
+markdown files with YAML frontmatter (description, mode, hidden, permission).
+OpenCode discovers them from this directory — they are NOT embedded in `opencode.json`.
 
 - [ ] **Step 4: Call Export-Agents from Invoke-ScriptMain**
 
 Insert after `Export-Skills` call:
 
 ```powershell
-    $agentConfig = Export-Agents -Plugins $plugins
+    Export-Agents -Plugins $plugins -OutputDir $OutputDir
 ```
 
 - [ ] **Step 5: Run script to verify agent parsing**
 
 ```powershell
 ./scripts/generate-opencode.ps1
+Get-ChildItem .opencode/agents/ | Measure-Object | Select-Object -ExpandProperty Count
 ```
 
-Expected: shows "Agents parsed: 16" and lists any warnings about handoffs/tools.
+Expected: shows "Agents written: 16 to .opencode\\agents", 16 agent files created.
 
 - [ ] **Step 6: Commit**
 
@@ -477,6 +495,11 @@ git commit -m "feat: add MCP and LSP config translation"
 
 ### Task 6: opencode.json generation with merge strategy
 
+**Note:** Agents are written to `.opencode/agents/<name>.md` markdown files by
+`Export-Agents` (Task 4), NOT into `opencode.json`. This task generates only the
+MCP and LSP configuration in `opencode.json`, plus preserves any user-added
+custom sections on merge.
+
 **Files:**
 - Modify: `scripts/generate-opencode.ps1` — add New-OpenCodeJson function
 
@@ -487,29 +510,23 @@ Append:
 ```powershell
 function New-OpenCodeJson {
     param(
-        [hashtable]$AgentConfig,
         [hashtable]$McpConfig,
         [hashtable]$LspConfig,
         [string]$ConfigFile
     )
 
-    # Prepare $newConfig for user-section merging
     $newConfig = [ordered]@{}
     if (Test-Path $ConfigFile) {
         Write-Host "  Existing $ConfigFile found, merging..."
         $existing = Get-Content $ConfigFile -Raw | ConvertFrom-Json
-
         foreach ($prop in $existing.PSObject.Properties.Name) {
             if ($prop -in @('$schema', 'agent', 'mcp', 'lsp', 'permission')) {
-                # Generated sections — replace with new below
             } else {
-                # User custom sections — preserve
                 $newConfig[$prop] = ConvertTo-HashtableDeep $existing.$prop
             }
         }
     }
 
-    # Build JSON manually with BEGIN/END GENERATED markers for generated sections
     $sb = [System.Text.StringBuilder]::new()
     $indent = 0
     function Write-JsonLine($text) {
@@ -520,34 +537,8 @@ function New-OpenCodeJson {
     $indent++
     Write-JsonLine '"$schema": "https://opencode.ai/config.json",'
     Write-JsonLine ''
-    Write-JsonLine '// BEGIN GENERATED — permission'
-    Write-JsonLine '"permission": { "skill": { "*": "allow" } },'
-    Write-JsonLine '// END GENERATED'
-    Write-JsonLine ''
-    Write-JsonLine '// BEGIN GENERATED — agent'
-    Write-JsonLine '"agent": {'
-    $first = $true
-    foreach ($name in ($AgentConfig.Keys | Sort-Object)) {
-        if (-not $first) { $sb.AppendLine(',') | Out-Null }
-        $first = $false
-        $a = $AgentConfig[$name]
-        $def = [ordered]@{
-            description = $a.description
-            mode        = $a.mode
-            prompt      = $a.prompt
-            permission  = $a.permission
-        }
-        if ($a.hidden) { $def["hidden"] = $true }
-        $agentEntry = $def | ConvertTo-Json -Depth 5 -Compress
-        Write-JsonLine "    `"$name`": $agentEntry"
-    }
-    $sb.AppendLine() | Out-Null
-    Write-JsonLine '},'
-    Write-JsonLine '// END GENERATED'
-    Write-JsonLine ''
 
     if ($McpConfig.Count -gt 0) {
-        Write-JsonLine '// BEGIN GENERATED — mcp'
         Write-JsonLine '"mcp": {'
         $first = $true
         foreach ($key in ($McpConfig.Keys | Sort-Object)) {
@@ -558,12 +549,10 @@ function New-OpenCodeJson {
         }
         $sb.AppendLine() | Out-Null
         Write-JsonLine '},'
-        Write-JsonLine '// END GENERATED'
         Write-JsonLine ''
     }
 
     if ($LspConfig.Count -gt 0) {
-        Write-JsonLine '// BEGIN GENERATED — lsp'
         Write-JsonLine '"lsp": {'
         $first = $true
         foreach ($key in ($LspConfig.Keys | Sort-Object)) {
@@ -574,18 +563,14 @@ function New-OpenCodeJson {
         }
         $sb.AppendLine() | Out-Null
         Write-JsonLine '},'
-        Write-JsonLine '// END GENERATED'
         Write-JsonLine ''
     }
 
-    # Preserve user sections
     foreach ($prop in $newConfig.Keys) {
-        if ($prop -in @('$schema', 'permission', 'agent', 'mcp', 'lsp')) { continue }
         $val = ConvertTo-Json $newConfig[$prop] -Depth 10 -Compress
         Write-JsonLine "`"$prop`": $val,"
     }
 
-    # Remove trailing comma from last line
     $content = $sb.ToString() -replace ',\s*$', ''
     $indent--
     $content += "`n}"
@@ -614,25 +599,25 @@ function ConvertTo-HashtableDeep {
 Insert at end of `Invoke-ScriptMain`:
 
 ```powershell
-    New-OpenCodeJson -AgentConfig $agentConfig -McpConfig $mcpConfig -LspConfig $lspConfig -ConfigFile $ConfigFile
+    New-OpenCodeJson -McpConfig $mcpConfig -LspConfig $lspConfig -ConfigFile $ConfigFile
 ```
 
 - [ ] **Step 3: Run script and inspect generated opencode.json**
 
 ```powershell
 ./scripts/generate-opencode.ps1
-python -c "import json; data=json.load(open('opencode.json')); print('Agents:', len(data.get('agent',{}))); print('MCP:', len(data.get('mcp',{}))); print('LSP:', len(data.get('lsp',{})))"
+python -c "import json; data=json.load(open('opencode.json')); print('MCP:', len(data.get('mcp',{}))); print('LSP:', len(data.get('lsp',{})))"
 ```
 
-Expected: "Agents: 16", "MCP: 1", "LSP: 1"
+Expected: "MCP: 1", "LSP: 1"
 
-- [ ] **Step 4: Verify agent entry structure — spot check one**
+- [ ] **Step 4: Verify agent markdown files exist**
 
 ```powershell
-python -c "import json; data=json.load(open('opencode.json')); a=data['agent']['msbuild']; print(a['mode']); print(a.get('hidden')); print('permission' in a)"
+Get-ChildItem .opencode/agents/ | Measure-Object | Select-Object -ExpandProperty Count
 ```
 
-Expected: prints `subagent`, `False`, `True`
+Expected: 16 (agents are written to `.opencode/agents/<name>.md` by Task 4's `Export-Agents`)
 
 - [ ] **Step 5: Commit**
 
@@ -742,7 +727,7 @@ Expected output:
     dotnet — skills: ..., agents: 0
     ...
   Skills exported: 92 to .opencode\skills
-  Agents parsed: 16
+  Agents written: 16 to .opencode\agents
   MCP servers: 1
   LSP servers: 1
   Updated .gitignore — added 3 entries
@@ -759,15 +744,13 @@ Get-ChildItem .opencode/skills/ | Measure-Object | Select-Object -ExpandProperty
 
 Expected: `True`, `True`, `92`
 
-- [ ] **Step 3: Verify opencode.json is valid JSON with all sections**
+- [ ] **Step 3: Verify opencode.json is valid JSON with MCP and LSP**
 
 ```powershell
 python -c "
 import json
 data = json.load(open('opencode.json'))
 assert '\$schema' in data
-assert data['permission']['skill']['*'] == 'allow'
-assert len(data['agent']) == 16
 assert 'binlog' in data['mcp']
 assert data['mcp']['binlog']['type'] == 'local'
 assert data['mcp']['binlog']['enabled'] == True
@@ -778,6 +761,19 @@ print('All assertions passed')
 ```
 
 Expected: `All assertions passed`
+
+- [ ] **Step 3b: Verify agent markdown files**
+
+```powershell
+$count = Get-ChildItem .opencode/agents/*.md | Measure-Object | Select-Object -ExpandProperty Count
+Write-Host "Agent files: $count"
+# spot-check one agent
+$msbuild = Get-Content .opencode/agents/msbuild.md -Raw
+$msbuild -match '^---\s*\ndescription:'
+$msbuild -match 'mode: subagent'
+```
+
+Expected: 16 agent files, msbuild.md has valid frontmatter.
 
 - [ ] **Step 4: Verify a skill file is valid and has correct frontmatter**
 
