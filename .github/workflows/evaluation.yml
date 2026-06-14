@@ -25,21 +25,47 @@
 #   - Secret access: only users with write+ permission can trigger evaluation
 name: evaluation
 
+# For a triage/manual single-PR dispatch, surface the PR + head in the run name.
+# This run name also doubles as the idempotency key the PR-triage worker matches
+# on (eval_run_exists_for_head in pr-triage-act.sh): a workflow_dispatch run's
+# head_sha is the default branch — not the PR head — so the run name is how the
+# worker recognises that an evaluation has already been dispatched for this head.
+# For all other events the expression yields '' and GitHub uses the default name.
+run-name: "${{ inputs.pr_number != '' && format('Evaluate PR #{0} @ {1}', inputs.pr_number, inputs.head_sha) || '' }}"
+
 on:
   # Manual trigger for one-off deploys (e.g., AGENTVIZ SPA update) and
   # targeted re-runs of a single plugin without committing to main.
+  # The pr_number/head_sha inputs are also the PR-triage worker's entry point:
+  # the worker dispatches this workflow directly (workflow_dispatch is exempt
+  # from GitHub's GITHUB_TOKEN recursion guard) instead of relying on the
+  # `evaluate-now` label, which never fires when applied by the bot.
   workflow_dispatch:
     inputs:
       plugin:
         description: "Specific plugin to evaluate (leave blank for all)"
         type: string
         required: false
+      pr_number:
+        description: "PR number to evaluate. Routes the dispatch through the gate/PR pipeline instead of a full/plugin run."
+        type: string
+        required: false
+      head_sha:
+        description: "Short head SHA of the PR (informational; used for the run name and triage idempotency). The gate re-fetches the live head."
+        type: string
+        required: false
 
   # Same-repo PRs: post initial status
   pull_request:
 
-  # Fork PRs: post initial status (runs from base branch for security)
+  # Fork PRs: post initial status (runs from base branch for security).
+  # Also receives `labeled` events: a human applying the `evaluate-now` label
+  # is one entry point into this pipeline (alongside `/evaluate`). The triage
+  # worker runs as github-actions[bot] and cannot use the label (label events
+  # emitted by GITHUB_TOKEN do not start workflows), so it uses the
+  # workflow_dispatch pr_number input above instead.
   pull_request_target:
+    types: [opened, synchronize, reopened, labeled]
 
   # /evaluate command trigger
   issue_comment:
@@ -50,7 +76,11 @@ on:
     - cron: '0 0 * * *'  # Once daily at midnight UTC
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'issue_comment' && (startsWith(github.event.comment.body, '/evaluate') && format('eval-{0}', github.event.issue.number) || format('eval-noop-{0}-{1}', github.event.issue.number, github.event.comment.id)) || (github.event_name == 'pull_request' && format('eval-status-{0}', github.event.pull_request.number) || (github.event_name == 'pull_request_target' && format('eval-fork-status-{0}', github.event.pull_request.number) || github.run_id)) }}
+  # /evaluate (issue_comment), the human-applied `evaluate-now` label
+  # (pull_request_target labeled), and the triage worker's workflow_dispatch
+  # (pr_number input) all share the same `eval-<pr_number>` group, so a race
+  # between any of them collapses to a single run for the PR.
+  group: ${{ github.workflow }}-${{ (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/evaluate')) && format('eval-{0}', github.event.issue.number) || (github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'evaluate-now') && format('eval-{0}', github.event.pull_request.number) || (github.event_name == 'workflow_dispatch' && inputs.pr_number != '') && format('eval-{0}', inputs.pr_number) || (github.event_name == 'issue_comment' && format('eval-noop-{0}-{1}', github.event.issue.number, github.event.comment.id)) || (github.event_name == 'pull_request' && format('eval-status-{0}', github.event.pull_request.number)) || (github.event_name == 'pull_request_target' && format('eval-fork-status-{0}', github.event.pull_request.number)) || github.run_id }}
   cancel-in-progress: true
 
 env:
@@ -137,6 +167,8 @@ jobs:
   fork-pr-status:
     if: >-
       github.event_name == 'pull_request_target' &&
+      github.event.action != 'labeled' &&
+      github.event.action != 'unlabeled' &&
       github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     permissions:
@@ -200,12 +232,27 @@ jobs:
 
   # ==========================================================================
   # GATE JOB
-  # Validate /evaluate command: must be on a PR from a user with write+ permissions.
+  # Validate evaluation trigger. Three entry points:
+  #   1. /evaluate comment (issue_comment) — original human path
+  #   2. evaluate-now label (pull_request_target labeled) — a human applying
+  #      the label (the bot cannot: GITHUB_TOKEN label events don't start runs)
+  #   3. workflow_dispatch with pr_number — the pr-triage worker's path. It runs
+  #      as github-actions[bot] and dispatches this workflow directly, since
+  #      workflow_dispatch is exempt from the GITHUB_TOKEN recursion guard.
+  # All must come from a trusted actor (write+ on the repo, or the workflow's
+  # own github-actions[bot] identity for paths 2 and 3).
   # ==========================================================================
   gate:
     if: >-
-      github.event.issue.pull_request &&
-      startsWith(github.event.comment.body, '/evaluate')
+      (github.event.issue.pull_request &&
+       startsWith(github.event.comment.body, '/evaluate'))
+      ||
+      (github.event_name == 'pull_request_target' &&
+       github.event.action == 'labeled' &&
+       github.event.label.name == 'evaluate-now')
+      ||
+      (github.event_name == 'workflow_dispatch' &&
+       inputs.pr_number != '')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -218,15 +265,29 @@ jobs:
       pr_number: ${{ steps.pr.outputs.pr_number }}
       is_fork: ${{ steps.pr.outputs.is_fork }}
     steps:
-      - name: Check commenter permissions
+      - name: Check actor permissions
         id: perms
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          PERMISSION=$(gh api "repos/${{ github.repository }}/collaborators/${{ github.event.comment.user.login }}/permission" --jq '.permission')
-          echo "Commenter ${{ github.event.comment.user.login }} has permission: $PERMISSION"
+          if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+            ACTOR='${{ github.event.comment.user.login }}'
+          else
+            ACTOR='${{ github.event.sender.login }}'
+          fi
+          # The triage worker dispatches this workflow as github-actions[bot]
+          # (workflow_dispatch). A human may instead apply the evaluate-now label,
+          # which arrives under that human's identity. The bot identity has no
+          # entry in /collaborators/* but is implicitly trusted because only this
+          # repository's own GITHUB_TOKEN can act under it.
+          if [[ "$ACTOR" == "github-actions[bot]" ]]; then
+            echo "Actor is github-actions[bot] — trusted by construction"
+            exit 0
+          fi
+          PERMISSION=$(gh api "repos/${{ github.repository }}/collaborators/${ACTOR}/permission" --jq '.permission')
+          echo "Actor ${ACTOR} has permission: $PERMISSION"
           if [[ "$PERMISSION" != "admin" && "$PERMISSION" != "write" && "$PERMISSION" != "maintain" ]]; then
-            echo "::error::User does not have write access"
+            echo "::error::Actor does not have write access"
             exit 1
           fi
 
@@ -234,8 +295,22 @@ jobs:
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
+          # Read the dispatch input via env (not direct interpolation) so the
+          # numeric validation below runs before the value reaches any gh api
+          # call — a crafted input cannot inject shell or path traversal.
+          PR_NUMBER_INPUT: ${{ inputs.pr_number }}
         run: |
-          PR_NUMBER=${{ github.event.issue.number }}
+          if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+            PR_NUMBER='${{ github.event.issue.number }}'
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            PR_NUMBER="$PR_NUMBER_INPUT"
+            if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+              echo "::error::workflow_dispatch input pr_number='$PR_NUMBER' must be a positive integer"
+              exit 1
+            fi
+          else
+            PR_NUMBER='${{ github.event.pull_request.number }}'
+          fi
           PR_DATA=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}")
           HEAD_SHA=$(echo "$PR_DATA" | jq -r '.head.sha')
           HEAD_REPO=$(echo "$PR_DATA" | jq -r '.head.repo.full_name')
@@ -254,11 +329,28 @@ jobs:
           echo "pr_number=${PR_NUMBER}" >> $GITHUB_OUTPUT
 
       - name: Add reaction to comment
+        if: github.event_name == 'issue_comment'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
             -X POST -f content='eyes' || true
+
+      - name: Remove evaluate-now label
+        if: github.event_name == 'pull_request_target' || github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # For the label entry point, removing the label consumes the trigger so
+          # re-applying re-fires. For the workflow_dispatch entry point there is no
+          # label to consume, but we still strip any stale human-applied
+          # evaluate-now label so it doesn't linger. Removal uses the workflow's
+          # own GITHUB_TOKEN; per GitHub's recursion rules, label events emitted by
+          # GITHUB_TOKEN do not start new workflow runs.
+          gh pr edit "${{ steps.pr.outputs.pr_number }}" \
+            --repo "${{ github.repository }}" \
+            --remove-label "evaluate-now" || true
 
       - name: Set pending commit status
         continue-on-error: true
@@ -279,7 +371,7 @@ jobs:
     needs: gate
     if: >-
       always() &&
-      (needs.gate.result == 'success' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      (needs.gate.result == 'success' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.pr_number == '')) &&
       (github.event_name != 'schedule' || github.repository == 'dotnet/skills')
     runs-on: ubuntu-latest
     permissions:
@@ -341,7 +433,7 @@ jobs:
           persist-credentials: false
 
       - name: Fetch PR head
-        if: github.event_name == 'issue_comment'
+        if: needs.gate.outputs.pr_number != ''
         run: git fetch origin +refs/pull/${{ needs.gate.outputs.pr_number }}/head:refs/remotes/origin/pr-head
 
       - name: Find skills to evaluate
@@ -392,8 +484,9 @@ jobs:
             })
           }
 
-          if ("${{ github.event_name }}" -eq "issue_comment") {
-            # /evaluate command: detect individual changed skills using gate outputs
+          if ("${{ needs.gate.outputs.pr_number }}" -ne "") {
+            # Single-PR run (either /evaluate or evaluate-now label):
+            # detect individual changed skills using gate outputs
             $base = "${{ needs.gate.outputs.base_sha }}"
             $head = (git rev-parse origin/pr-head)
 
@@ -874,7 +967,8 @@ jobs:
 
             # Append AGENTVIZ replay link if session data was published
             if [[ "${{ needs.publish-session-data.result }}" == "success" ]]; then
-              MANIFEST_URL="https://raw.githubusercontent.com/${{ github.repository }}/dashboard-session-data/data/manifest.json"
+              # Session data lives in the standalone dotnet/skills-data repo.
+              MANIFEST_URL="https://raw.githubusercontent.com/dotnet/skills-data/dashboard-session-data/data/manifest.json"
               # Derive the Pages base URL from the repository (org.github.io/repo)
               ORG=$(echo "${{ github.repository }}" | cut -d/ -f1)
               REPO=$(echo "${{ github.repository }}" | cut -d/ -f2)
@@ -883,6 +977,10 @@ jobs:
               FULL_URL="${REPLAY_URL}?manifest=${MANIFEST_ENCODED}&tag=pr-${PR_NUMBER}"
               echo "" >> consolidated-comment.md
               echo "**[▶ Sessions Visualisation](${FULL_URL})** -- interactive replay of all evaluation sessions" >> consolidated-comment.md
+              ANALYTICS_BASE_URL="https://server.mangowater-996ff7b2.swedencentral.azurecontainerapps.io/"
+              FACET_ENCODED=$(printf '%s' "label:pr-${PR_NUMBER}" | jq -sRr @uri)
+              ANALYTICS_URL="${ANALYTICS_BASE_URL}?facet=${FACET_ENCODED}"
+              echo "**[📊 Session Analytics (preview)](${ANALYTICS_URL})** -- aggregated metrics across evaluation sessions" >> consolidated-comment.md
             fi
 
             # Action summary: full table (all columns) + investigation prompt
@@ -912,7 +1010,7 @@ jobs:
   # ==========================================================================
   report-status:
     needs: [gate, discover, build-validator, evaluate]
-    if: always() && github.event_name == 'issue_comment' && needs.gate.result == 'success'
+    if: always() && needs.gate.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       statuses: write
@@ -920,6 +1018,7 @@ jobs:
       issues: write
     steps:
       - name: Remove eyes reaction from trigger comment
+        if: github.event_name == 'issue_comment'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -985,7 +1084,7 @@ jobs:
       needs.discover.outputs.has_plugins == 'true' &&
       (
         github.ref == 'refs/heads/main' ||
-        (github.event_name == 'issue_comment' && needs.gate.result == 'success')
+        needs.gate.result == 'success'
       )
     concurrency:
       group: publish-token-data
@@ -1014,7 +1113,7 @@ jobs:
             git checkout HEAD -- . || true
 
       - name: Get PR title
-        if: github.event_name == 'issue_comment'
+        if: needs.gate.outputs.pr_number != ''
         id: pr-info
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1026,7 +1125,7 @@ jobs:
         env:
           PR_TITLE: ${{ steps.pr-info.outputs.pr_title }}
         run: |
-          $source = if ("${{ github.event_name }}" -eq "issue_comment") { "pr" } else { "scheduled" }
+          $source = if ("${{ needs.gate.outputs.pr_number }}" -ne "") { "pr" } else { "scheduled" }
           $plugins = '${{ needs.discover.outputs.plugins }}' | ConvertFrom-Json
           foreach ($plugin in $plugins) {
             # For scheduled runs and infra-change PRs, artifacts are named
@@ -1098,7 +1197,7 @@ jobs:
           git add data/token-usage.json
           git diff --cached --quiet && echo "No changes to deploy" && exit 0
 
-          if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+          if [[ -n "${{ needs.gate.outputs.pr_number }}" ]]; then
             git commit -m "Update PR token usage data (PR #${{ needs.gate.outputs.pr_number }})"
           else
             git commit -m "Update scheduled token usage data"
@@ -1108,6 +1207,7 @@ jobs:
   # ==========================================================================
   # PUBLISH SESSION DATA
   # Both scheduled and PR runs: flatten JSONL sessions → dashboard-session-data
+  # branch on dotnet/skills-data (separate repo to keep this one small).
   # ==========================================================================
   publish-session-data:
     needs: [gate, discover, evaluate]
@@ -1117,7 +1217,7 @@ jobs:
       needs.discover.outputs.has_plugins == 'true' &&
       (
         github.ref == 'refs/heads/main' ||
-        (github.event_name == 'issue_comment' && needs.gate.result == 'success')
+        needs.gate.result == 'success'
       )
     runs-on: ubuntu-latest
     concurrency:
@@ -1155,7 +1255,7 @@ jobs:
       - name: Determine source metadata
         id: meta
         run: |
-          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+          if [ -n "${{ needs.gate.outputs.pr_number }}" ]; then
             echo "source=pr" >> "$GITHUB_OUTPUT"
             echo "pr_number=${{ needs.gate.outputs.pr_number }}" >> "$GITHUB_OUTPUT"
             echo "subdir=pr/${{ needs.gate.outputs.pr_number }}" >> "$GITHUB_OUTPUT"
@@ -1175,12 +1275,16 @@ jobs:
             -PrNumber "${{ steps.meta.outputs.pr_number }}"
 
       - name: Clone existing session data branch
+        env:
+          # Cross-repo PAT with contents:write on dotnet/skills-data.
+          # GITHUB_TOKEN cannot push to a different repo, so a fine-grained PAT is required.
+          SKILLS_DATA_TOKEN: ${{ secrets.SKILLS_DATA_TOKEN }}
         run: |
           cd /tmp
-          REPO_URL="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          REPO_URL="https://x-access-token:${SKILLS_DATA_TOKEN}@github.com/dotnet/skills-data.git"
 
           if git ls-remote --exit-code --heads "$REPO_URL" dashboard-session-data > /dev/null 2>&1; then
-            git clone --branch dashboard-session-data --single-branch "$REPO_URL" session-deploy
+            git clone --branch dashboard-session-data --single-branch --depth 1 "$REPO_URL" session-deploy
           else
             mkdir session-deploy && cd session-deploy && git init && git checkout -b dashboard-session-data
             git remote add origin "$REPO_URL"
@@ -1200,13 +1304,13 @@ jobs:
             -OutputDir /tmp/session-deploy/data `
             -RetentionDays 7
 
-      - name: Push to dashboard-session-data branch
+      - name: Push to dashboard-session-data branch (dotnet/skills-data)
         run: |
           cd /tmp/session-deploy
           git add data/
           git diff --cached --quiet && echo "No changes to deploy" && exit 0
 
-          if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+          if [[ -n "${{ needs.gate.outputs.pr_number }}" ]]; then
             git commit -m "Update session data (PR #${{ needs.gate.outputs.pr_number }})"
           else
             git commit -m "Update scheduled session data"
