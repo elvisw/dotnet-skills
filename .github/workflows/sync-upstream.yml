@@ -29,9 +29,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote get-url upstream 2>/dev/null \
-            && git remote set-url upstream https://github.com/dotnet/skills.git \
-            || git remote add upstream https://github.com/dotnet/skills.git
+          if git remote get-url upstream >/dev/null 2>&1; then
+            git remote set-url upstream https://github.com/dotnet/skills.git
+          else
+            git remote add upstream https://github.com/dotnet/skills.git
+          fi
           git fetch upstream
           chmod +x scripts/generate-opencode.ps1
           pip install --user pyyaml
