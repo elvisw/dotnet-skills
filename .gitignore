@@ -435,6 +435,6 @@ vally-results/
 .superpowers/
 
 # OpenCode generated files
-opencode.json
 .opencode/*
 !.opencode/commands/
+!opencode.json

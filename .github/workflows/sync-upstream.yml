@@ -1,6 +1,9 @@
 name: Sync Upstream
 
 on:
+  schedule:
+    - cron: '0 6 * * *'  # daily at 06:00 UTC
+  workflow_dispatch:
   issue_comment:
     types: [created]
 
@@ -11,9 +14,10 @@ concurrency:
 jobs:
   sync:
     if: |
-      (github.event.comment.body == '/sync-upstream' ||
-       startsWith(github.event.comment.body, '/sync-upstream ')) &&
-      github.event.comment.user.login == 'elvisw'
+      github.event_name != 'issue_comment' ||
+      ((github.event.comment.body == '/sync-upstream' ||
+        startsWith(github.event.comment.body, '/sync-upstream ')) &&
+       github.event.comment.user.login == 'elvisw')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

@@ -221,15 +221,32 @@ lsp.json (上游)                        opencode.json (目标)
 
 通过 GitHub Actions + opencode agent 自动执行上游合并：
 
-**触发方式：** 在仓库任意 Issue 评论区发送 `/sync-upstream`
+**触发方式：**
+
+| 方式 | 说明 |
+|------|------|
+| `schedule` | 每天 UTC 06:00 自动运行 |
+| `workflow_dispatch` | GitHub Actions UI 手动触发 |
+| `issue_comment` | Issue 评论区发送 `/sync-upstream`（仅 `elvisw`） |
 
 ```bash
-# 创建 Issue 并触发
+# 通过 gh CLI 手动触发
 gh issue create --title "Sync upstream" --body "merge upstream"
 gh issue comment <编号> --body "/sync-upstream"
 ```
 
-**权限控制：** 仅仓库所有者 `elvisw` 可触发，其他人评论被忽略。
+**权限放行：** `opencode.json` 配置 `question: "deny"` + `bash/edit/read: allow`，workflow_dispatch/schedule 不再弹确认框。
+
+```json
+{
+  "permission": {
+    "bash": "allow",
+    "edit": "allow",
+    "read": "allow",
+    "question": "deny"
+  }
+}
+```
 
 **工作流文件：** `.github/workflows/sync-upstream.yml`
 **命令文件：** `.opencode/commands/sync-upstream.md`

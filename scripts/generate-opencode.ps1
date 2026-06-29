@@ -295,7 +295,7 @@ function New-OpenCodeJson {
         Write-Host "  Existing $ConfigFile found, merging..."
         $existing = Get-Content $ConfigFile -Raw | ConvertFrom-Json
         foreach ($prop in $existing.PSObject.Properties.Name) {
-            if ($prop -in @('$schema', 'agent', 'mcp', 'lsp', 'permission')) {
+            if ($prop -in @('$schema', 'agent', 'mcp', 'lsp')) {
             } else {
                 $newConfig[$prop] = ConvertTo-HashtableDeep $existing.$prop
             }
@@ -359,9 +359,9 @@ function Update-GitIgnore {
 
     $entries = @(
         "# OpenCode generated files",
-        "opencode.json",
         ".opencode/*",
-        "!.opencode/commands/"
+        "!.opencode/commands/",
+        "!opencode.json"
     )
 
     $existing = if (Test-Path $GitIgnorePath) {
