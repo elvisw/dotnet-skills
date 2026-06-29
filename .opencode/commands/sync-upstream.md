@@ -9,7 +9,7 @@ description: 合并上游 dotnet/skills 更新，保持 OpenCode 支持设计
 
 ## 触发方式
 
-- **GitHub Actions**：在任意 Issue 评论区发送 `/sync-upstream`（仅仓库所有者 `elvisw` 可触发）
+- **GitHub Actions**：通过 `schedule`（每天 06:00 UTC）或 `workflow_dispatch`（手动）自动触发
 - **本地**：直接在终端运行 `git merge upstream/main`，然后按本文档步骤操作
 
 ## 设计原则（来自 docs/superpowers/specs/2026-05-29-opencode-support-design.md）

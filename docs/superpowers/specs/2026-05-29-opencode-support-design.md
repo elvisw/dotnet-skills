@@ -227,13 +227,6 @@ lsp.json (上游)                        opencode.json (目标)
 |------|------|
 | `schedule` | 每天 UTC 06:00 自动运行 |
 | `workflow_dispatch` | GitHub Actions UI 手动触发 |
-| `issue_comment` | Issue 评论区发送 `/sync-upstream`（仅 `elvisw`） |
-
-```bash
-# 通过 gh CLI 手动触发
-gh issue create --title "Sync upstream" --body "merge upstream"
-gh issue comment <编号> --body "/sync-upstream"
-```
 
 **权限放行：** `opencode.json` 配置 `question: "deny"` + `bash/edit/read: allow`，workflow_dispatch/schedule 不再弹确认框。
 
