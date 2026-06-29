@@ -4,18 +4,24 @@ on:
   issue_comment:
     types: [created]
 
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
 jobs:
   sync:
     if: |
-      contains(github.event.comment.body, '/sync-upstream') &&
+      (github.event.comment.body == '/sync-upstream' ||
+       startsWith(github.event.comment.body, '/sync-upstream ')) &&
       github.event.comment.user.login == 'elvisw'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       id-token: write
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -23,13 +29,28 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add upstream https://github.com/dotnet/skills.git || true
-          pip install pyyaml
+          git remote get-url upstream 2>/dev/null \
+            && git remote set-url upstream https://github.com/dotnet/skills.git \
+            || git remote add upstream https://github.com/dotnet/skills.git
+          git fetch upstream
+          chmod +x scripts/generate-opencode.ps1
+          pip install --user pyyaml
+
+      - name: Check if upstream has new commits
+        id: check
+        run: |
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "up_to_date=true" >> $GITHUB_OUTPUT
+          else
+            echo "up_to_date=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Sync upstream
+        if: steps.check.outputs.up_to_date == 'false'
         uses: anomalyco/opencode/github@latest
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           model: deepseek/deepseek-v4-pro
           prompt: |
@@ -38,6 +59,15 @@ jobs:
             1. Read the command file with the Read tool, then follow all steps exactly.
             2. Design principles: accept upstream (--theirs) for all plugins/ and tests/ conflicts.
                Preserve: docs/superpowers/, scripts/generate-opencode.ps1, .gitignore opencode entries.
-            3. If upstream is already up-to-date (no new commits), report "Already up to date" and exit successfully.
-            4. After merge, commit with "chore: merge upstream/main - resolve conflicts" and push to origin main.
-            5. Report a summary: conflicts encountered and how resolved, script verification result.
+            3. After merge, commit with "chore: merge upstream/main - resolve conflicts" and push to origin main.
+            4. Report a summary: conflicts encountered and how resolved, script verification result.
+
+      - name: Report already up-to-date
+        if: steps.check.outputs.up_to_date == 'true'
+        run: echo "Upstream is already up to date, nothing to sync."
+
+      - name: Abort merge on failure
+        if: failure()
+        run: |
+          git merge --abort 2>/dev/null || true
+          git reset --hard HEAD
