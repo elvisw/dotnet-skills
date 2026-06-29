@@ -82,21 +82,23 @@ Remove-Item opencode.json -ErrorAction SilentlyContinue
 Test-Path .opencode/commands/sync-upstream.md
 ```
 
-### Step 7: 提交并推送
+### Step 7: 恢复暂存的本地变更
+
+如果 Step 2 执行了 stash，在提交前恢复：
+
+```bash
+git stash pop
+```
+
+如果 pop 有冲突，手动解决后 `git stash drop`。
+
+### Step 8: 提交并推送
 
 ```bash
 git commit -m "chore: merge upstream/main - resolve conflicts"
 git push origin main
 ```
 
-### Step 7.5: 恢复暂存的本地变更
-
-如果 Step 2 执行了 stash，恢复：
-
-```bash
-git stash pop
-```
-
-### Step 8: 输出摘要
+### Step 9: 输出摘要
 
 报告合并结果：冲突数量、解决方式、脚本验证结果、新增/删除的技能或插件。
