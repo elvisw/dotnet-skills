@@ -26,7 +26,11 @@ git fetch upstream
 git status --short
 ```
 
-如果有未跟踪或未提交的文件，先暂存提交。
+如果有未跟踪或未提交的文件，先暂存：
+
+```bash
+git add -A && git stash -m "pre-merge: sync-upstream"
+```
 
 ### Step 3: 执行 merge（使用 merge，不用 rebase）
 
@@ -48,7 +52,7 @@ git diff --name-only --diff-filter=U
 |------|------|
 | `plugins/` 下的内容冲突 | `git checkout --theirs <file>` 接受上游 |
 | `plugins/` 下的 modify/delete | `git add <file>` 接受上游（保留文件） |
-| `tests/` 下的冲突 | `git checkout --theirs <file>` 接受上游 |
+| `tests/` 下的冲突 | `git checkout --theirs <file>` 接受上游（tests/ 非本地资产，与 plugins/ 同策略） |
 | 本地独有文件（docs/superpowers/、scripts/、.gitignore） | 不应冲突，如有冲突保留本地版本 |
 
 ### Step 5: 逐个解决冲突
@@ -61,21 +65,36 @@ git diff --name-only --diff-filter=U
 
 ### Step 6: 验证 generate-opencode.ps1
 
-提交前运行脚本确保 OpenCode 转化功能正常：
+提交前运行脚本确保 OpenCode 转化功能正常。注意只删除生成物子目录，保留 `commands/`：
 
 ```bash
-Remove-Item -Recurse -Force .opencode -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force .opencode/skills -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force .opencode/agents -ErrorAction SilentlyContinue
 Remove-Item opencode.json -ErrorAction SilentlyContinue
 ./scripts/generate-opencode.ps1
 ```
 
 预期输出：15 个插件、~99 个技能、16 个代理，无技能名冲突。
 
+验证命令文件未被误删：
+
+```bash
+Test-Path .opencode/commands/sync-upstream.md
+```
+
 ### Step 7: 提交并推送
 
 ```bash
 git commit -m "chore: merge upstream/main - resolve conflicts"
 git push origin main
+```
+
+### Step 7.5: 恢复暂存的本地变更
+
+如果 Step 2 执行了 stash，恢复：
+
+```bash
+git stash pop
 ```
 
 ### Step 8: 输出摘要
