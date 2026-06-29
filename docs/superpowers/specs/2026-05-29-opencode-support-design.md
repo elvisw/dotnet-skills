@@ -208,10 +208,63 @@ lsp.json (上游)                        opencode.json (目标)
 
 ## 上游合并策略
 
-- `plugins/` 目录零修改 → `git merge upstream/main` 完全无冲突
-- `scripts/` 目录在上游仓库中不存在，无冲突
-- 上游新增/删除技能或代理 → 运行 `./scripts/generate-opencode.ps1` 即可
-- 上游修改 MCP/LSP 配置 → 运行脚本即可同步
+### 设计原则
+
+- **零侵入上游**：`plugins/` 目录零修改，合并冲突一律接受上游版本
+- **使用 merge**（非 rebase），保持完整历史以方便 GitHub fork 对比
+- **冲突策略**：
+  - `plugins/` 下冲突 → `git checkout --theirs` 接受上游
+  - `tests/` 下冲突 → 同上（非本地资产）
+  - 本地独有文件（`docs/superpowers/`、`scripts/generate-opencode.ps1`、`.gitignore` opencode 规则）→ 保留本地
+
+### 自动合并工作流（推荐）
+
+通过 GitHub Actions + opencode agent 自动执行上游合并：
+
+**触发方式：** 在仓库任意 Issue 评论区发送 `/sync-upstream`
+
+```bash
+# 创建 Issue 并触发
+gh issue create --title "Sync upstream" --body "merge upstream"
+gh issue comment <编号> --body "/sync-upstream"
+```
+
+**权限控制：** 仅仓库所有者 `elvisw` 可触发，其他人评论被忽略。
+
+**工作流文件：** `.github/workflows/sync-upstream.yml`
+**命令文件：** `.opencode/commands/sync-upstream.md`
+
+**流程：**
+
+```
+Issue /sync-upstream 评论
+        │
+        ▼ (仅 elvisw)
+┌─ Check ────────────────────────────────┐
+│ git merge-base --is-ancestor           │
+│ 已最新 → 跳过，不消耗 LLM 额度          │
+│ 有新提交 → 继续                          │
+└────────────────────────────────────────┘
+        │
+        ▼
+┌─ opencode agent ───────────────────────┐
+│ 1. git merge upstream/main             │
+│ 2. 解决冲突 (plugins/tests → --theirs)  │
+│ 3. 验证 generate-opencode.ps1           │
+│ 4. git commit && git push              │
+└────────────────────────────────────────┘
+```
+
+### 本地手动合并
+
+```bash
+git fetch upstream
+git merge upstream/main --no-commit --no-ff
+# 解决冲突: plugins/ 和 tests/ 用 git checkout --theirs
+./scripts/generate-opencode.ps1   # 验证脚本
+git commit -m "chore: merge upstream/main - resolve conflicts"
+git push origin main
+```
 
 ---
 
@@ -221,13 +274,17 @@ lsp.json (上游)                        opencode.json (目标)
 
 | 文件 | 说明 |
 |---|---|
-| `scripts/generate-opencode.ps1` | 生成脚本 |
+| `scripts/generate-opencode.ps1` | OpenCode 配置生成脚本 |
+| `.opencode/commands/sync-upstream.md` | 上游合并自动化命令 |
+| `.github/workflows/sync-upstream.yml` | GitHub Actions 自动合并工作流 |
+| `.github/workflows/opencode.yml` | opencode agent 触发工作流 |
+| `docs/superpowers/` | 设计文档 |
 
 ### 修改（入仓库）
 
 | 文件 | 说明 |
 |---|---|
-| `.gitignore` | 追加生成物忽略规则（去重） |
+| `.gitignore` | 追加 opencode 生成物忽略规则（`opencode.json`、`.opencode/*`），排除 `!.opencode/commands/` | |
 
 ### 生成物（不入仓库，.gitignore 忽略）
 
