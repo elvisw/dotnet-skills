@@ -68,9 +68,8 @@ git diff --name-only --diff-filter=U
 提交前运行脚本确保 OpenCode 转化功能正常。注意只删除生成物子目录，保留 `commands/`：
 
 ```bash
-Remove-Item -Recurse -Force .opencode/skills -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force .opencode/agents -ErrorAction SilentlyContinue
-Remove-Item opencode.json -ErrorAction SilentlyContinue
+rm -rf .opencode/skills .opencode/agents
+rm -f opencode.json
 ./scripts/generate-opencode.ps1
 ```
 
@@ -79,7 +78,7 @@ Remove-Item opencode.json -ErrorAction SilentlyContinue
 验证命令文件未被误删：
 
 ```bash
-Test-Path .opencode/commands/sync-upstream.md
+ls .opencode/commands/sync-upstream.md >/dev/null 2>&1 && echo "OK" || echo "MISSING"
 ```
 
 ### Step 7: 恢复暂存的本地变更

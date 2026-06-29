@@ -1,0 +1,41 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # daily at 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup environment
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/dotnet/skills.git || true
+          pip install pyyaml
+
+      - name: Sync upstream
+        uses: anomalyco/opencode/github@latest
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        with:
+          model: deepseek/deepseek-v4-pro
+          prompt: |
+            Execute the /sync-upstream workflow as defined in .opencode/commands/sync-upstream.md.
+
+            1. Read the command file with the Read tool, then follow all steps exactly.
+            2. Design principles: accept upstream (--theirs) for all plugins/ and tests/ conflicts.
+               Preserve: docs/superpowers/, scripts/generate-opencode.ps1, .gitignore opencode entries.
+            3. If upstream is already up-to-date (no new commits), report "Already up to date" and exit successfully.
+            4. After merge, commit with "chore: merge upstream/main - resolve conflicts" and push to origin main.
+            5. Report a summary: conflicts encountered and how resolved, script verification result.
