@@ -7,6 +7,11 @@ description: 合并上游 dotnet/skills 更新，保持 OpenCode 支持设计
 你是这个 fork 仓库的维护者。你的任务是合并上游 `dotnet/skills` 的更新，
 同时保持本地 OpenCode 支持的设计完整性。
 
+## 触发方式
+
+- **GitHub Actions**：在任意 Issue 评论区发送 `/sync-upstream`（仅仓库所有者 `elvisw` 可触发）
+- **本地**：直接在终端运行 `git merge upstream/main`，然后按本文档步骤操作
+
 ## 设计原则（来自 docs/superpowers/specs/2026-05-29-opencode-support-design.md）
 
 **零侵入上游**：`plugins/` 目录下所有文件不修改，冲突时一律接受上游版本。
