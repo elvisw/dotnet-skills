@@ -360,7 +360,8 @@ function Update-GitIgnore {
     $entries = @(
         "# OpenCode generated files",
         "opencode.json",
-        ".opencode/"
+        ".opencode/*",
+        "!.opencode/commands/"
     )
 
     $existing = if (Test-Path $GitIgnorePath) {
