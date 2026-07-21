@@ -1,6 +1,20 @@
 ---
 name: writing-mstest-tests
-description: "Best practices for writing new MSTest 3.x/4.x unit tests and implementing concrete fixes in existing MSTest code. Use when the user asks to write, create, implement, repair, or modernize tests (including fix-it prompts such as 'something seems off, fix issues'). Primary fit for direct code changes like correcting swapped Assert.AreEqual argument order, replacing outdated assertion patterns, and converting DynamicData from IEnumerable<object[]> to ValueTuple-based data sets. Covers modern assertions, data-driven tests, test lifecycle, MSTest.Sdk, sealed classes, Assert.Throws, DynamicData with ValueTuples, TestContext, and conditional execution. Do NOT use for broad test quality audits, flaky-test investigations, or test smell detection reports — use test-anti-patterns instead."
+description: >
+  Write, create, modernize, or fix comprehensive MSTest unit tests with MSTest 3.x/4.x APIs.
+  USE FOR: write, create, review, or modernize MSTest tests and assertions,
+  better MSTest assertion than Assert.IsTrue, replace hard cast with IsInstanceOfType,
+  MSTest assertion APIs (Contains, ContainsSingle, HasCount, IsEmpty, IsNotEmpty, DoesNotContain,
+  AreSame, IsNull, StartsWith, EndsWith, MatchesRegex, IsGreaterThan, IsLessThan, IsInRange),
+  swapped/reversed Assert.AreEqual args (Expected/Actual backwards),
+  replace ExpectedException with Assert.Throws,
+  data-driven (DataRow, DynamicData, ValueTuples),
+  lifecycle (TestInitialize, TestCleanup, TestContext),
+  async and cancellation tests, conditional execution/retry/cleanup (OSCondition, Retry),
+  parallelization (Parallelize/DoNotParallelize), MSTest.Sdk setup, MSTESTxxxx analyzer fixes.
+  DO NOT USE FOR: test quality audits (use test-anti-patterns),
+  running tests (use run-tests), MSTest version migration (use migrate-mstest skills),
+  xUnit/NUnit/TUnit, or non-.NET languages.
 license: MIT
 ---
 
@@ -13,9 +27,12 @@ Help users write effective, modern unit tests with MSTest 3.x/4.x using current 
 - User wants to write new MSTest unit tests
 - User wants to improve or modernize existing MSTest tests by implementing concrete fixes
 - User asks about MSTest assertion APIs, data-driven patterns, or test lifecycle
+- User asks to replace `Assert.IsTrue` with more specific assertions (collections, nulls, types, comparisons)
+- User asks to replace hard casts with type-checking assertions in tests
 - User needs help fixing a specific MSTest test bug or failing assertion
 - User asks to fix swapped `Assert.AreEqual` argument order (expected first, actual second)
 - User asks to convert `DynamicData` from `IEnumerable<object[]>` to ValueTuple-based data
+- User asks to fix or understand an MSTest analyzer diagnostic (an `MSTESTxxxx` warning/error)
 
 ## When Not to Use
 
@@ -33,6 +50,12 @@ Help users write effective, modern unit tests with MSTest 3.x/4.x using current 
 | Code under test | No | The production code to be tested |
 | Existing test code | No | Current tests to fix, update, or modernize |
 | Test scenario description | No | What behavior the user wants to test |
+
+## Response Guidelines
+
+- **Specific API or pattern questions** (assertions, data-driven, lifecycle): Jump directly to the relevant workflow step. Do not follow the full workflow.
+- **Write new tests from scratch**: Follow the full workflow.
+- **Review and fix existing tests**: Fix only the issues present. Do not add unrelated improvements.
 
 ## Workflow
 
@@ -109,13 +132,29 @@ public sealed class OrderServiceTests
 
 ### Step 3: Use modern assertion APIs
 
-Use the correct assertion for each scenario. Prefer `Assert` class methods over `StringAssert` or `CollectionAssert` where both exist.
+Pick the most specific assertion for each test scenario. More specific assertions produce better failure messages and make the test's intent clear:
 
-#### Equality and null checks
+| What you are testing | Assertion |
+|---|---|
+| Two values are equal | `Assert.AreEqual(expected, actual)` |
+| Same object instance (reference identity) | `Assert.AreSame(expected, actual)` |
+| Value is null | `Assert.IsNull(value)` |
+| Value is not null | `Assert.IsNotNull(value)` |
+| Collection is empty | `Assert.IsEmpty(collection)` |
+| Collection is not empty | `Assert.IsNotEmpty(collection)` |
+| Collection has exactly N items | `Assert.HasCount(N, collection)` |
+| Collection contains an item | `Assert.Contains(item, collection)` |
+| Collection does not contain an item | `Assert.DoesNotContain(item, collection)` |
+| Object is a specific type | `Assert.IsInstanceOfType<T>(value)` |
+| Code throws an exception | `Assert.ThrowsExactly<T>(() => ...)` |
+
+Prefer `Assert` class methods over `StringAssert` or `CollectionAssert` where both exist.
+
+#### Equality, null, and reference checks
 
 ```csharp
 Assert.AreEqual(expected, actual);      // Value equality
-Assert.AreSame(expected, actual);       // Reference equality
+Assert.AreSame(expected, actual);       // Reference equality -- same object instance
 Assert.IsNull(value);
 Assert.IsNotNull(value);
 ```
@@ -151,8 +190,12 @@ Replace generic `Assert.IsTrue` with specialized assertions -- they give better 
 | Instead of | Use |
 |---|---|
 | `Assert.IsTrue(list.Count > 0)` | `Assert.IsNotEmpty(list)` |
+| `Assert.IsTrue(list.Count == 0)` | `Assert.IsEmpty(list)` |
 | `Assert.IsTrue(list.Count() == 3)` | `Assert.HasCount(3, list)` |
 | `Assert.IsTrue(x != null)` | `Assert.IsNotNull(x)` |
+| `Assert.IsTrue(x == null)` | `Assert.IsNull(x)` |
+| `Assert.AreEqual(a, b)` for same instance | `Assert.AreSame(a, b)` -- reference identity |
+| `Assert.IsTrue(!list.Contains(item))` | `Assert.DoesNotContain(item, list)` |
 | `list.Single(predicate)` + `Assert.IsNotNull` | `Assert.ContainsSingle(list)` |
 | `Assert.IsTrue(list.Contains(item))` | `Assert.Contains(item, list)` |
 
@@ -324,28 +367,45 @@ public void LocalOnly_InteractiveTest() { }
 public sealed class DatabaseIntegrationTests { }
 ```
 
-## Validation
+### Step 8: Fix MSTest analyzer diagnostics (MSTESTxxxx)
 
-- [ ] Test classes are `sealed`
-- [ ] Test methods follow `MethodName_Scenario_ExpectedBehavior` naming
-- [ ] `Assert.ThrowsExactly<T>` used instead of `[ExpectedException]`
-- [ ] Specialized assertions used instead of `Assert.IsTrue` (e.g., `Assert.IsNotNull`, `Assert.AreEqual`)
-- [ ] DynamicData uses ValueTuple return types instead of `IEnumerable<object[]>`
-- [ ] Sync initialization done in the constructor, not `[TestInitialize]`
-- [ ] `TestContext.CancellationToken` passed to async calls in tests with `[Timeout]`
-- [ ] Project builds with zero errors and all tests pass
+The `MSTest.Analyzers` package reports `MSTESTxxxx` diagnostics during build and in the IDE. The analyzers come in automatically with the modern `MSTest` metapackage and `MSTest.Sdk` (and are bundled with `MSTest.TestFramework` 3.7+); for other setups, reference `MSTest.Analyzers` explicitly. Most rules have an automated code fix (light bulb) in Visual Studio. When fixing one by hand, apply the idiomatic change below rather than suppressing the rule.
 
-## Common Pitfalls
+When asked to "fix MSTESTxxxx", look it up in the table of common diagnostics below, apply the fix, and rebuild to confirm the diagnostic is gone. The table is not exhaustive — for any rule it does not list, consult the full reference and apply the documented guidance: <https://learn.microsoft.com/dotnet/core/testing/mstest-analyzers/overview>.
 
-| Pitfall | Solution |
-|---------|----------|
-| `Assert.AreEqual(actual, expected)` -- swapped arguments | Always put expected first: `Assert.AreEqual(expected, actual)`. Failure messages show "Expected: X, Actual: Y" so wrong order makes messages confusing |
-| `[ExpectedException]` -- obsolete, cannot assert message | Use `Assert.Throws<T>` or `Assert.ThrowsExactly<T>` |
-| `items.Single()` -- unclear exception on failure | Use `Assert.ContainsSingle(items)` for better failure messages |
-| Hard cast `(MyType)result` -- unclear exception | Use `Assert.IsInstanceOfType<MyType>(result)` |
-| `IEnumerable<object[]>` for DynamicData | Use `IEnumerable<(T1, T2, ...)>` ValueTuples for type safety |
-| Sync setup in `[TestInitialize]` | Initialize in the constructor instead -- enables `readonly` fields and satisfies nullability analyzers |
-| `CancellationToken.None` in async tests | Use `TestContext.CancellationToken` for cooperative timeout |
-| `public TestContext? TestContext { get; set; }` | Drop the `?` -- MSTest suppresses CS8618 for this property |
-| `TestContext TestContext { get; set; } = null!` | Remove `= null!` -- unnecessary, MSTest handles assignment |
-| Non-sealed test classes | Seal test classes by default for performance |
+#### Common diagnostics and their fixes
+
+| Rule | Problem | Fix |
+|---|---|---|
+| MSTEST0006 | `[ExpectedException]` used | Replace with `Assert.Throws<T>` / `Assert.ThrowsExactly<T>` (Step 3) |
+| MSTEST0017 | `Assert.AreEqual` args swapped | Put `expected` first, `actual` second |
+| MSTEST0023 | Negated boolean assertion (`Assert.IsTrue(!x)`) | Use `Assert.IsFalse(x)` |
+| MSTEST0025 | Always-false condition asserted | Use `Assert.Fail("reason")` |
+| MSTEST0032 | Always-true assert condition | Remove or correct the assertion |
+| MSTEST0037 | Sub-optimal assert (`IsTrue(x == null)`) | Use the specific assert (`Assert.IsNull`, `HasCount`, etc.) (Step 3) |
+| MSTEST0038 | `Assert.AreSame` on value types | Use `Assert.AreEqual` (value types box to distinct references) |
+| MSTEST0039 | Legacy `Assert.ThrowsException` | Use `Assert.Throws` / `Assert.ThrowsExactly` (+ `Async` variants) |
+| MSTEST0044 | `[DataTestMethod]` used | Replace with `[TestMethod]` (it now supports data rows) |
+| MSTEST0046 | `StringAssert` used | Use the equivalent `Assert` method (`Assert.Contains`, `StartsWith`, ...) |
+| MSTEST0052 | Explicit `DynamicDataSourceType` | Drop it — the source type is inferred |
+| MSTEST0042 / MSTEST0060 | Duplicate `[DataRow]` / `[TestMethod]` | Remove the duplicate attribute |
+| MSTEST0024 | Static `TestContext` field | Make it an instance member (Step 5) |
+| MSTEST0045 / MSTEST0049 / MSTEST0054 | Timeout/token not cooperative | Flow `TestContext.CancellationToken` into the awaited call (Step 6) |
+| MSTEST0036 | Member shadows a base test member | Rename or use `override` instead of `new` |
+| MSTEST0061 | Runtime OS check inside a test | Use `[OSCondition(...)]` (Step 7) |
+| MSTEST0002 / MSTEST0003 / MSTEST0005 / MSTEST0007–0014 | Invalid test class / method / fixture / `TestContext` / data-source layout | Correct the signature named by the rule (e.g. make it public, fix the return type and parameters, add `static` where required) |
+
+#### Tuning which rules are enforced
+
+Use the `MSTestAnalysisMode` MSBuild property (MSTest 3.8+) to control the rule set globally:
+
+```xml
+<PropertyGroup>
+  <!-- None | Default | Recommended | All -->
+  <MSTestAnalysisMode>Recommended</MSTestAnalysisMode>
+</PropertyGroup>
+```
+
+- `Recommended` escalates info-level rules to warnings and is the mode most projects should adopt.
+- A handful of rules are completely opt-in (e.g. MSTEST0015, MSTEST0019–0022); enable them per project via `.editorconfig` when you want their convention enforced.
+- Prefer fixing the underlying code over suppressing a diagnostic. Suppress only with a documented justification.

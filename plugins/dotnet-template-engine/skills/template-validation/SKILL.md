@@ -61,11 +61,11 @@ When reviewing a template.json, check ALL of the following categories systematic
 
 ### 3. ShortName Conflicts
 
-The following short names conflict with dotnet CLI commands and will cause problems:
+A shortName that matches a `dotnet new` subcommand conflicts, because `dotnet new <name>` is then parsed as that subcommand instead of instantiating the template. Read the reserved set for the installed SDK from the `Commands:` section of `dotnet new --help` — that is the authoritative source and avoids this rule going stale.
 
-`new`, `build`, `run`, `test`, `publish`, `restore`, `clean`, `pack`, `add`, `remove`, `list`, `nuget`, `tool`, `sln`, `help`
+As of current SDKs the subcommands include (illustrative only — version-dependent, do not hardcode this list; the live `dotnet new --help` output is canonical): `install`, `uninstall`, `update`, `list`, `search`, `details`, `create`. Note that top-level `dotnet` verbs like `build`, `run`, `test`, and `publish` do NOT conflict — `dotnet new test` does not collide with `dotnet test`.
 
-- ERROR if shortName matches any reserved name (case-insensitive)
+- ERROR if shortName matches any subcommand reported by `dotnet new --help` (case-insensitive)
 - WARNING if shortName is only 1 character — too short for discoverability
 - Note: shortName can be a string or an array of strings; check all values
 
@@ -136,18 +136,30 @@ Run all 8 validation categories above. Collect errors, warnings, and suggestions
 
 ### Step 3: Report results
 
-Present findings organized by severity:
-1. **Errors** (must fix) — template will not work correctly
-2. **Warnings** (should fix) — template may cause confusion or limited functionality
-3. **Suggestions** (nice to have) — improvements for discoverability and user experience
+**Lead with a one-line verdict**, then a single findings table. This decisive shape is required — do not scatter findings across prose paragraphs.
 
-Include the total: "X error(s), Y warning(s), Z suggestion(s)"
+Verdict header (pick one):
+- `❌ Not ready — N error(s), M warning(s)` — has errors
+- `⚠️ Publishable but N warning(s)` — no errors, has warnings
+- `✅ Ready to publish — 0 errors, 0 warnings` — no errors or warnings (optional suggestions may still apply)
+
+Then one table, ordered errors → warnings → suggestions:
+
+| Severity | Location (JSON path or `line:col`) | Issue | Fix |
+|----------|------------------------------------|-------|-----|
+| ERROR | `shortName` | `"list"` conflicts with a `dotnet new` subcommand | Rename to a distinctive value, e.g. `"my-list"` |
+| ERROR | `symbols.maxRetries.defaultValue` | `"abc"` is not a valid `int` | Set a numeric default, e.g. `"3"` |
+| ERROR | `12:5` | JSON parse error: unexpected `,` | Remove the trailing comma |
+
+**Every ERROR and WARNING MUST include a concrete fix** — the corrected value, JSON snippet, or a specific edit instruction (e.g. "remove the trailing comma"), not just a restatement of the problem. A finding without an actionable fix is incomplete. This is the single biggest thing that separates a useful validation from a generic lint.
+
+Close with the total: "N error(s), M warning(s), K suggestion(s)."
 
 ## Common Pitfalls
 
 | Pitfall | Impact |
 |---------|--------|
-| ShortName = "test" or "build" | Template can never be created — conflicts with CLI |
+| ShortName = "list" or "search" | Template can never be created — conflicts with a `dotnet new` subcommand |
 | Missing `sourceName` | `--name MyProject` doesn't rename anything in the generated files |
 | Choice parameter without `defaultValue` | Confusing user experience on optional choice params |
 | Invalid `datatype` value | Template engine ignores the symbol, causing silent failures |

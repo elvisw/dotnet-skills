@@ -1,15 +1,22 @@
 ---
 name: code-testing-agent
 description: >-
-  Generates comprehensive, workable unit tests for any programming language
-  using a multi-agent pipeline. Use when asked to generate tests, write unit
-  tests, improve test coverage, add test coverage, or create test files.
-  Supports C#, TypeScript, JavaScript, Python, Go, Rust, Java, and more.
-  Orchestrates research, planning, and implementation phases to produce
-  tests that compile, pass, and follow project conventions.
-  DO NOT USE FOR: running existing tests, executing dotnet test, applying
-  test filters, detecting test platforms, or troubleshooting test execution
-  (use run-tests for all of these).
+  Generates and writes new unit tests for any programming language —
+  scaffolds test projects and configures coverage tooling
+  (coverlet, pytest-cov, @vitest/coverage-v8) as part of test
+  generation. Use when asked to generate tests, generate pytest
+  tests, generate Vitest tests, write unit tests, add tests, improve
+  coverage, comprehensive tests, or scaffold a new test project or
+  suite for an app, service, library, REST API, blueprint, or
+  package — including project-wide, multi-file test generation
+  across services, repositories, routes, and modules. Supports
+  C#/.NET, Python (pytest, Flask/Django), TypeScript/JavaScript
+  (Vitest, Jest, Mocha), Go, Rust, Java (JUnit). Runs a research,
+  planning, and implementation pipeline so tests compile and pass.
+  DO NOT USE FOR: running existing tests (use run-tests); analyzing
+  existing coverage reports (use coverage-analysis or crap-score);
+  writing, fixing, or modernizing MSTest-specific tests, assertions,
+  attributes, or lifecycle (use writing-mstest-tests).
 license: MIT
 ---
 
@@ -83,46 +90,16 @@ Generate unit tests for [path or description of what to test], following the [un
 
 The Test Generator will manage the entire pipeline automatically.
 
-### Step 3: Research Phase (Automatic)
+### Step 3: Execute with bounded context
 
-The `code-testing-researcher` agent analyzes your codebase to understand:
+For multi-file requests:
 
-- **Language & Framework**: Detects C#, TypeScript, Python, Go, Rust, Java, etc.
-- **Testing Framework**: Identifies MSTest, xUnit, Jest, pytest, go test, etc.
-- **Project Structure**: Maps source files, existing tests, and dependencies
-- **Build Commands**: Discovers how to build and test the project
-
-Output: `.testagent/research.md`
-
-### Step 4: Planning Phase (Automatic)
-
-The `code-testing-planner` agent creates a structured implementation plan:
-
-- Groups files into logical phases (2-5 phases typical)
-- Prioritizes by complexity and dependencies
-- Specifies test cases for each file
-- Defines success criteria per phase
-
-Output: `.testagent/plan.md`
-
-### Step 5: Implementation Phase (Automatic)
-
-The `code-testing-implementer` agent executes each phase sequentially:
-
-1. **Read** source files to understand the API
-2. **Write** test files following project patterns
-3. **Build** using the `code-testing-builder` sub-agent to verify compilation
-4. **Test** using the `code-testing-tester` sub-agent to verify tests pass
-5. **Fix** using the `code-testing-fixer` sub-agent if errors occur
-6. **Lint** using the `code-testing-linter` sub-agent for code formatting
-
-Each phase completes before the next begins, ensuring incremental progress.
-
-### Coverage Types
-
-- **Happy path**: Valid inputs produce expected outputs
-- **Edge cases**: Empty values, boundaries, special characters
-- **Error cases**: Invalid inputs, null handling, exceptions
+1. Research only the requested module or project and write a compact `.testagent/research.md`.
+2. Reuse manifests, symbol references, and deterministic pairing tools instead of reading every source and test file.
+3. For C# multi-file scopes, run `find-untested-sources` once and consume its `source_to_tests`, `untested`, and `suggested_test_path` output; do not repeat that pairing manually.
+4. Plan each target file once, then implement phases sequentially.
+5. Build and test the narrow target during fix cycles; run workspace-level validation once at the end.
+6. Read a language example from `code-testing-extensions` only when the repository has no representative tests and the base extension is insufficient.
 
 ## State Management
 
@@ -142,7 +119,7 @@ The generator picks a strategy based on request scope:
 
 | User Request | Strategy | Why |
 |---|---|---|
-| "Generate tests for `src/services/UserService.ts`" | **Direct** | Single file, small scope — write tests immediately, skip sub-agents |
+| "Generate tests for `src/services/UserService.ts`" | **Direct** | Single file, small scope — write tests immediately, skip sub-agents (but still run the generator's Step 7 pre-completion gate — `test-gap-analysis` + `assertion-quality` — before finishing) |
 | "Add unit tests for my billing project" | **Single pass** | Moderate scope — one Research → Plan → Implement cycle covers it |
 | "Achieve 80% coverage across the entire solution" | **Iterative** | Large scope — multiple R→P→I cycles, each narrowing remaining gaps |
 
@@ -161,6 +138,12 @@ Given a request like *"Generate unit tests for my InvoiceService"*, the pipeline
 The `code-testing-extensions` skill provides concrete, filled-in examples for each pipeline phase showing real source code, real research output, real plans, and real generated tests. Call the `code-testing-extensions` skill to discover available extension files, then read:
 
 - **`dotnet-examples.md`** — MSTest example with InvoiceService: research output, plan output, generated test file, fix cycle walkthrough, and final report
+- **`python-examples.md`** — pytest example with the same InvoiceService scenario: research, plan, generated test file (parametrized, `unittest.mock`), fix cycles (`ModuleNotFoundError`, patch target, `Mock(spec=...)`), and final report
+- **`typescript-examples.md`** — Vitest example (also applicable to Jest) showing `it.each` parameterization, async tests, fake timers, and ESM/CJS fix cycles
+- **`go-examples.md`** — Standard `testing` package example with table-driven subtests, hand-written fake repository, injected clock, and `-run` regex fix cycle
+- **`java-examples.md`** — JUnit 5 + Mockito example on Maven showing `@ExtendWith(MockitoExtension.class)`, `@ParameterizedTest` + `@CsvSource`, `Clock.fixed(...)` for time, and Surefire fix cycles
+
+For languages without a dedicated examples file (Rust, Ruby, Swift, Kotlin, C++, PowerShell), use the base extension file (`<language>.md`) plus the example file for the closest paradigm — the pipeline shape (research → plan → generate → fix) and the categories of decisions (test layout, mocking strategy, fixed clock for time-dependent code, parameterization style) translate directly.
 
 ## Agent Reference
 
