@@ -2,12 +2,12 @@
   "$schema": "https://opencode.ai/config.json",
   
   "mcp": {
-      "binlog": {"type":"local","command":["dotnet","dnx","Microsoft.AITools.BinlogMcp","--yes"],"enabled":true}
+      "binlog": {"type":"local","enabled":true,"command":["dotnet","dnx","Microsoft.AITools.BinlogMcp","--yes"]}
 
   },
   
   "lsp": {
-      "csharp": {"command":["dotnet","dnx","roslyn-language-server","--yes","--prerelease","--","--stdio","--autoLoadProjects"],"extensions":[".cs",".razor",".cshtml"]}
+      "csharp": {"extensions":[".cs",".razor",".cshtml"],"command":["dotnet","dnx","roslyn-language-server","--yes","--prerelease","--","--stdio","--autoLoadProjects"]}
 
   }
   
