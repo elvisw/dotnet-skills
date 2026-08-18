@@ -119,7 +119,7 @@ jobs:
       cache-key: ${{ steps.cache-key.outputs.key }}
     steps:
       - name: Checkout trusted validator source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
@@ -256,7 +256,7 @@ jobs:
           done
 
       - name: Checkout skills content
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.head_sha || '' }}
           persist-credentials: false
@@ -357,13 +357,14 @@ jobs:
 
       - name: Checkout trusted validator source
         if: steps.find-evals.outputs.has_evals == 'true'
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: _trusted-validator-src
           persist-credentials: false
           sparse-checkout: |
             eng/evaluation/nuget.config
+            eng/evaluation-tools
             eng/skill-validator
             eng/vally-adapter
             global.json
@@ -389,19 +390,21 @@ jobs:
 
       - name: Install vally and Copilot CLI
         if: steps.find-evals.outputs.has_evals == 'true'
-        # Pin both tools: the direct Copilot CLI invocation probes a token before
-        # Vally starts expensive trials, while Vally uses the same CLI runtime
-        # through @github/copilot-sdk.
+        # Install the trusted, pinned toolchain. The direct Copilot CLI invocation
+        # probes a token before Vally starts expensive trials, while Vally uses the
+        # same CLI runtime through @github/copilot-sdk.
         working-directory: ${{ runner.temp }}
         run: |
           printf '' > "$RUNNER_TEMP/evaluation.npmrc"
           rm -rf "$RUNNER_TEMP/evaluation-tools"
-          npm install \
+          mkdir -p "$RUNNER_TEMP/evaluation-tools"
+          cp "$RUNNER_TEMP/trusted-validator-src/eng/evaluation-tools/package.json" \
+            "$RUNNER_TEMP/trusted-validator-src/eng/evaluation-tools/package-lock.json" \
+            "$RUNNER_TEMP/evaluation-tools/"
+          npm ci \
             --prefix "$RUNNER_TEMP/evaluation-tools" \
             --userconfig "$RUNNER_TEMP/evaluation.npmrc" \
-            --registry https://registry.npmjs.org/ \
-            @microsoft/vally-cli@0.9.0 \
-            @github/copilot@1.0.75
+            --registry https://registry.npmjs.org/
           (
             cd "$RUNNER_TEMP/evaluation-tools"
             node --input-type=module -e "import.meta.resolve('@github/copilot-linux-x64/sdk')"
