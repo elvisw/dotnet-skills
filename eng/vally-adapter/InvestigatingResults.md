@@ -72,6 +72,15 @@ Plugin-arm activation is labeled as aggregate plugin activity because the
 current adapter does not identify which loaded plugin skill emitted that event;
 only the isolated arm proves activation of the target skill.
 
+Each evidence header also shows the evaluated commit and compares it with the
+commit that supplied the deployed dashboard UI. A yellow warning means the
+commits differ. When their timestamps establish that the evidence is older, the
+warning displays the age and identifies it as retained historical evidence; if
+age is unavailable or the evidence is not older, it reports only the mismatch
+and asks the reader to verify the revision. A green notice means the commits
+match. If deployment metadata is unavailable, the dashboard reports the
+comparison as unknown rather than guessing.
+
 The 0–10 **Quality Score Triage** summary and trend charts remain useful for
 spotting changes in absolute grader scores. They do not decide pass/fail. Older
 dashboard history predates the additive `verdictEvidence` payload, so the UI
@@ -170,6 +179,18 @@ Work top-down; earlier categories often cause later ones.
 ### 1. Errored or missing trials (`state == "INVALID_INCONCLUSIVE"`)
 The agent crashed, the model was unavailable, evidence was missing, or the comparison judge failed. Check `stateReason`, `errors[]`, `adapter-summary.json`, and the variant's `results.jsonl`/session logs. These are invalid measurements, not skill regressions. If a required variant produced no records, the adapter writes an explicit invalid result with `missing_baseline_records` or `missing_skilled_records`.
 
+The workflow retries only required baseline or isolated-skilled executor records
+whose exact failure is a `session.idle` timeout. It reruns the affected eval and
+variant once, preserves all successful first-attempt slots, and replaces only
+matching failed `shardKey` slots from the same normalized eval path that
+succeed. Records without a `shardKey` remain invalid. Check
+`executor-retry-summary.json` and the raw record's `executorRetry` field for
+recovered attempts. The merged record retains the original experiment
+provenance; `executorRetry.retryRunId` identifies the successful retry run.
+Persistent timeouts, other executor failures, or more than three affected
+eval/variant groups remain measurement-invalid and keep the matrix leg red. The
+optional whole-plugin arm is report-only telemetry and is not retried.
+
 If Vally writes a JSON record that cannot satisfy the comparison schema, the
 adapter emits `comparison_report_invalid` for that eval and continues the batch.
 This preserves exact result accounting without treating malformed evidence as a
@@ -182,8 +203,18 @@ successful first-attempt judgment fixed and replaces only errored slots. A
 recovered transient appears in `recoveredErrors[]`; an unresolved failure stays
 in `errors[]` and makes the state invalid.
 
+At the workflow level, exit code 124 with `Vally comparison watchdog expired`
+means the remote comparison phase exceeded its 60-minute recovery budget.
+Partial artifacts are uploaded for diagnosis but the result set remains invalid;
+do not promote the completed subset to a skill result. Re-run the same commit
+after checking whether the slowdown was transient.
+
+An intermittent `ENOENT` for `.git/objects/maintenance.lock` while copying an
+eval fixture is a fixture setup race, not model behavior. Disable automatic Git
+maintenance and GC in the fixture repository before its baseline commit.
+
 ### 2. Timeouts (`scenario.timedOut == true`, `trajectory.endReason == "agent_timeout"`)
-The agent didn't finish within the eval's `config.timeout`. Either the task is too large for the budget or the skill sent the agent down a slow path. Fixes: raise `config.timeout` in `eval.yaml` if the task legitimately needs more time, or tighten the skill so it converges faster.
+The agent didn't finish within the eval's `config.timeout`. Either the task is too large for the budget or the skill sent the agent down a slow path. Fixes: raise `config.timeout` in `eval.yaml` if the task legitimately needs more time (genuine code generation or repository exploration commonly needs 6–8 minutes plus headroom above observed successful runs), or tighten the skill so it converges faster.
 
 ### 3. Skill didn't activate (`skillActivationIsolated.activated == false`)
 The skill was available but the agent never invoked it, so "skilled" ≈ "baseline" and no improvement is possible. Fixes: sharpen the skill's `description`/trigger phrasing in `SKILL.md` so the model recognizes when to use it, and make sure the eval prompt actually describes a task the skill targets.
