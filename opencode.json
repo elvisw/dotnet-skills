@@ -7,7 +7,7 @@
   },
   
   "lsp": {
-      "csharp": {"extensions":[".cs",".razor",".cshtml"],"command":["dotnet","dnx","roslyn-language-server","--yes","--prerelease","--","--stdio","--autoLoadProjects"]}
+      "csharp": {"command":["dotnet","dnx","roslyn-language-server","--yes","--prerelease","--","--stdio","--autoLoadProjects"],"extensions":[".cs",".razor",".cshtml"]}
 
   }
   
