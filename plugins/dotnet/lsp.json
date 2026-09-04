@@ -9,6 +9,7 @@
         "--prerelease",
         "--",
         "--stdio",
+        "--daemon-mode",
         "--autoLoadProjects"
       ],
       "fileExtensions": {
