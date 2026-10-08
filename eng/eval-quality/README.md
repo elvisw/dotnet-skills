@@ -13,7 +13,7 @@ python eng/eval-quality/check_eval_quality.py --all    # audit every eval suite
 python eng/eval-quality/selftest_eval_quality.py       # prove the gate still fires
 ```
 
-The gate has **22 failing checks**. It proves deterministic structure and reference integrity. It
+The gate has **23 failing checks**. It proves deterministic structure and reference integrity. It
 does not decide whether a scenario is necessary, whether it belongs to the target, whether a prompt
 sounds like a real developer request, or whether the scenario portfolio has product value.
 
@@ -504,6 +504,12 @@ expected-result voice when neither form of evidence exists. These checks inspect
 both string messages and text inside multipart ATIF content. The gate also
 rejects a complete rubric item copied into the response.
 
+### 23. Environment fixture source has no destination
+
+Every `environment.files` entry with `src` must also declare a non-empty `dest`. Vally rejects the
+entire eval before loading any stimuli when a destination is omitted, even if the source exists and
+is tracked.
+
 ## Why the gate scores direction, not magnitude
 
 Worth recording, because the check above is only half of what went wrong.
@@ -607,7 +613,7 @@ such an eval would make the number worse, not better.
 The honest coverage for these is **dependency-level**: they are exercised
 through the evals of the skills that load them (for example `run-tests` and
 `mtp-hot-reload` load `platform-detection` and `filter-syntax`, the polyglot
-analysis skills load `test-analysis-extensions`, and `code-testing-agent` loads
+analysis skills load `test-analysis-extensions`, and `code-testing` loads
 `code-testing-extensions`), and in the plugin arm, where the whole plugin is
 loaded. Closing this properly needs harness support for declaring a dependency
 in the skilled variant, not a per-skill eval file.
